@@ -1,15 +1,15 @@
 import type { ForwardReturnSummary } from '../../quant/eventStudy'
 import type { MarketDataset, MarketEvent } from '../../data/types'
 
-interface Props { dataset: MarketDataset | null; events: MarketEvent[]; markerCount: number; selectedEventId: string | null; results: ForwardReturnSummary[]; conditions: string[]; onRun: () => void; onSelect: (id: string | null) => void; disabled: boolean }
+interface Props { dataset: MarketDataset | null; events: MarketEvent[]; markerCount: number; selectedEventId: string | null; results: ForwardReturnSummary[]; conditions: string[]; strategyReady: boolean; onRun: () => void; onSelect: (id: string | null) => void; disabled: boolean }
 const formatPeriod = (timestamp?: number) => timestamp ? new Date(timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
-export function ResearchPanel({ dataset, events, markerCount, selectedEventId, results, conditions, onRun, onSelect, disabled }: Props) {
+export function ResearchPanel({ dataset, events, markerCount, selectedEventId, results, conditions, strategyReady, onRun, onSelect, disabled }: Props) {
   const selectedIndex = Math.max(0, events.findIndex((event) => event.id === selectedEventId))
   const selectOffset = (offset: number) => { if (events.length) onSelect(events[(selectedIndex + offset + events.length) % events.length].id) }
   return <section className="research-panel panel" aria-label="Research study">
-    <div className="panel-heading"><span>Research study</span><button className="text-button enabled" onClick={onRun} disabled={disabled}>Run quick study</button></div>
+    <div className="panel-heading"><span>Event study</span><button className="text-button enabled" onClick={onRun} disabled={disabled}>Run event study</button></div>
     <div className="research-context"><strong>{dataset ? `${dataset.asset.symbol} · ${dataset.timeframe}` : 'No active market'}</strong><span>{dataset ? `${formatPeriod(dataset.asset.startDate)} – ${formatPeriod(dataset.asset.endDate)}` : 'Load a market to begin'}</span></div>
-    {!events.length ? <div className="research-empty"><span className="research-index">01</span><div><strong>Structured historical research</strong><p>Run a no-lookahead scan on the active timeframe. Matching events feed an independent forward-return study.</p><small>Conditions · no active scan &nbsp; / &nbsp; Markers · 0 shown</small></div></div> : <div className="study-results">
+    {!events.length ? <div className="research-empty"><span className="research-index">02</span><div><strong>{strategyReady ? 'Run the selected robust strategy' : 'Parameter Lab comes first'}</strong><p>{strategyReady ? 'This event study will use the saved robust region from Parameter Lab—there is no independent condition reset.' : 'Find a valid robust parameter region first. It becomes the shared strategy definition for event study and trade simulation.'}</p><small>{strategyReady ? 'Strategy saved · ready for event study' : 'Strategy settings · pending'}</small></div></div> : <div className="study-results">
       <div className="condition-list" aria-label="Study conditions">{conditions.map((condition) => <span key={condition}>{condition}</span>)}</div>
       <div className="study-summary"><strong>{events.length.toLocaleString()} historical events</strong><span>{markerCount.toLocaleString()} chart markers shown · all events used statistically</span></div>
       <div className="event-navigation"><button onClick={() => selectOffset(-1)} disabled={!events.length}>Previous event</button><span>{selectedEventId ? `Event ${selectedIndex + 1} of ${events.length}` : 'Select an event'}</span><button onClick={() => selectOffset(1)} disabled={!events.length}>Next event</button></div>

@@ -250,6 +250,34 @@ export function queryMarketConditions(input: ConditionInput) {
   return { asset: dataset.asset.symbol, conditionCount: input.conditions.length, eventCount: events.length, events: events.slice(0, 100).map((event) => ({ id: event.id, timestamp: event.timestamp, barIndex: event.barIndex, conditionsMatched: event.conditionsMatched })), eventListTruncated: events.length > 100 }
 }
 
+/** Promotes the best valid parameter-search result into the shared event-study context. */
+export function applyRecommendedStrategy(asset?: string, options: { preserveEventStudy?: boolean } = {}) {
+  const dataset = resolveDataset(asset); const state = getWorkspaceState()
+  const assetCandidate = state.parameterSearch?.symbol === dataset.asset.symbol && state.parameterSearch.timeframe === dataset.timeframe ? state.parameterSearch.candidates.find((candidate) => !candidate.rejected) : undefined
+  const universalCandidate = !assetCandidate && state.universalParameterSearch?.timeframe === dataset.timeframe ? state.universalParameterSearch.candidates[0] : undefined
+  const recommendation = assetCandidate ? { conditions: state.parameterSearch!.conditions, parameters: assetCandidate.parameters, source: 'asset' as const } : universalCandidate ? { conditions: state.universalParameterSearch!.conditions, parameters: universalCandidate.parameters, source: 'universal' as const } : null
+  if (!recommendation) throw new WorkspaceServiceError('INVALID_INPUT', 'Run Parameter Lab first, then use its valid robust region for the event study.')
+  const conditions = applyParameters(recommendation.conditions, recommendation.parameters)
+  const descriptions = conditions.map(conditionDescription)
+  const sameStrategyAsStudy = state.researchConditions.length === descriptions.length
+    && state.researchConditions.every((condition, index) => condition === descriptions[index])
+  if (!options.preserveEventStudy || !sameStrategyAsStudy) {
+    const result = queryMarketConditions({ asset: dataset.asset.symbol, conditions })
+    return { ...result, parameterSource: recommendation.source, parameters: recommendation.parameters }
+  }
+
+  // Trade Simulation is the next stage of the same workflow. Keep a completed Event Study
+  // visible when its exact saved robust settings are being reused.
+  const events = scanMarketConditions(dataset.bars, dataset.asset.symbol, conditions)
+  workspaceStore.setResearchConditions(descriptions)
+  workspaceStore.setEvents(events)
+  workspaceStore.setHistoricalTrades([], null)
+  workspaceStore.selectEvent(events[0]?.id ?? null)
+  if (events[0]) focusChart({ eventId: events[0].id })
+  const result = { asset: dataset.asset.symbol, conditionCount: conditions.length, eventCount: events.length, events: events.slice(0, 100).map((event) => ({ id: event.id, timestamp: event.timestamp, barIndex: event.barIndex, conditionsMatched: event.conditionsMatched })), eventListTruncated: events.length > 100 }
+  return { ...result, parameterSource: recommendation.source, parameters: recommendation.parameters }
+}
+
 /** Runs isolated derived-timeframe analysis and intentionally leaves the human chart untouched. */
 export function compareTimeframes(input: CompareTimeframesInput) {
   const active = resolveDataset(input.asset)
@@ -323,16 +351,8 @@ export function simulateWorkspaceTrades(input: SimulateTradesInput) {
   if (!['long', 'short'].includes(input.direction)) throw new WorkspaceServiceError('INVALID_INPUT', 'direction must be long or short.')
   if (!['event_close', 'next_bar_open'].includes(input.entryRule ?? 'next_bar_open')) throw new WorkspaceServiceError('INVALID_INPUT', 'entryRule must be event_close or next_bar_open.')
   if (!['stop_first', 'target_first', 'ambiguous'].includes(input.collisionPolicy ?? 'stop_first')) throw new WorkspaceServiceError('INVALID_INPUT', 'collisionPolicy must be stop_first, target_first, or ambiguous.')
-  const state = getWorkspaceState()
-  const assetRecommendation = state.parameterSearch?.symbol === dataset.asset.symbol && state.parameterSearch.timeframe === dataset.timeframe ? state.parameterSearch.candidates.find((candidate) => !candidate.rejected) : undefined
-  const universalRecommendation = !assetRecommendation && state.universalParameterSearch?.timeframe === dataset.timeframe ? state.universalParameterSearch.candidates[0] : undefined
-  const recommendation = assetRecommendation ? { conditions: state.parameterSearch!.conditions, parameters: assetRecommendation.parameters, source: 'asset' as const } : universalRecommendation ? { conditions: state.universalParameterSearch!.conditions, parameters: universalRecommendation.parameters, source: 'universal' as const } : null
   // A manual event selection remains authoritative. Otherwise the next simulation follows the best valid robust region.
-  if (recommendation && input.eventIds === undefined) {
-    const conditions = applyParameters(recommendation.conditions, recommendation.parameters)
-    const recommendedEvents = scanMarketConditions(dataset.bars, dataset.asset.symbol, conditions)
-    workspaceStore.setResearchConditions(conditions.map(conditionDescription)); workspaceStore.setEvents(recommendedEvents); workspaceStore.selectEvent(recommendedEvents[0]?.id ?? null)
-  }
+  const recommendation = input.eventIds === undefined ? (() => { try { return applyRecommendedStrategy(dataset.asset.symbol, { preserveEventStudy: true }) } catch { return null } })() : null
   const allEvents = getWorkspaceState().marketEvents.filter((event) => event.assetSymbol === dataset.asset.symbol)
   const events = input.eventIds ? input.eventIds.map((id) => { const event = allEvents.find((candidate) => candidate.id === id); if (!event) throw new WorkspaceServiceError('NO_MARKET_EVENTS', `Event ${id} does not exist for the active dataset.`); return event }) : allEvents
   if (!events.length) throw new WorkspaceServiceError('NO_MARKET_EVENTS', 'No current market events are available. Run query_market_conditions first.')
@@ -344,7 +364,7 @@ export function simulateWorkspaceTrades(input: SimulateTradesInput) {
     const recommendedTrade = trades.filter((trade) => trade.outcome !== 'ambiguous').sort((left, right) => right.realizedR - left.realizedR || left.entryTimestamp - right.entryTimestamp)[0] ?? trades[0]
     if (recommendedTrade) focusTrade(recommendedTrade.id)
     const worstTrade = trades.filter((trade) => trade.outcome !== 'ambiguous').sort((left, right) => left.realizedR - right.realizedR)[0] ?? null
-    return { asset: dataset.asset.symbol, timeframe: dataset.timeframe, entryRule: input.entryRule ?? 'next_bar_open', collisionPolicy: input.collisionPolicy ?? 'stop_first', parameterSource: recommendation?.source ?? 'current_events', tradeCount: trades.length, selectedTradeId: recommendedTrade?.id ?? null, recommendedTrade: recommendedTrade ? { id: recommendedTrade.id, outcome: recommendedTrade.outcome, realizedR: recommendedTrade.realizedR, entryTimestamp: recommendedTrade.entryTimestamp } : null, worstTrade: worstTrade ? { id: worstTrade.id, outcome: worstTrade.outcome, realizedR: worstTrade.realizedR, entryTimestamp: worstTrade.entryTimestamp } : null, statistics }
+    return { asset: dataset.asset.symbol, timeframe: dataset.timeframe, entryRule: input.entryRule ?? 'next_bar_open', collisionPolicy: input.collisionPolicy ?? 'stop_first', parameterSource: recommendation?.parameterSource ?? 'current_events', tradeCount: trades.length, selectedTradeId: recommendedTrade?.id ?? null, recommendedTrade: recommendedTrade ? { id: recommendedTrade.id, outcome: recommendedTrade.outcome, realizedR: recommendedTrade.realizedR, entryTimestamp: recommendedTrade.entryTimestamp } : null, worstTrade: worstTrade ? { id: worstTrade.id, outcome: worstTrade.outcome, realizedR: worstTrade.realizedR, entryTimestamp: worstTrade.entryTimestamp } : null, statistics }
   } catch (error) { throw new WorkspaceServiceError('INVALID_INPUT', error instanceof Error ? error.message : 'Trade simulation configuration is invalid.') }
 }
 
