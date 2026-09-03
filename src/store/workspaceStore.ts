@@ -3,7 +3,7 @@ import { availableTimeframes } from '../data/timeframeAggregator'
 import { availableDatasets } from '../data/datasets'
 import type { WorkspaceActions, WorkspaceState, WorkspaceStore } from './types'
 
-const initialState: WorkspaceState = { activeAsset: null, activeTimeframe: '1m', availableTimeframes, canonicalDataset: null, selectedDataset: null, visibleChartRange: null, activeIndicators: [], researchConditions: [], marketEvents: [], selectedEventId: null, eventStudyResults: [], chartAnnotations: [], researchFindings: [], agentActivity: [], researchUniverse: availableDatasets.map((source) => source.symbol), universeStudy: null, parameterSearch: null, historicalTrades: [], selectedTradeId: null, tradeStudyStatistics: null, quantitativeMetrics: [], loading: false, error: null }
+const initialState: WorkspaceState = { activeAsset: null, activeTimeframe: '1m', availableTimeframes, canonicalDataset: null, selectedDataset: null, visibleChartRange: null, activeIndicators: [], researchConditions: [], marketEvents: [], selectedEventId: null, eventStudyResults: [], chartAnnotations: [], researchFindings: [], agentActivity: [], researchUniverse: availableDatasets.map((source) => source.symbol), universeStudy: null, parameterSearch: null, universalParameterSearch: null, historicalTrades: [], selectedTradeId: null, tradeStudyStatistics: null, quantitativeMetrics: [], loading: false, progress: null, error: null }
 let state = initialState
 const listeners = new Set<() => void>()
 function update(partial: Partial<WorkspaceState>) { state = { ...state, ...partial }; listeners.forEach((listener) => listener()) }
@@ -17,20 +17,20 @@ const actions: WorkspaceActions = {
   setEvents: (marketEvents) => update({ marketEvents, selectedEventId: null }), selectEvent: (selectedEventId) => update({ selectedEventId }),
   setEventStudyResults: (eventStudyResults) => update({ eventStudyResults }), setQuantitativeMetrics: (quantitativeMetrics) => update({ quantitativeMetrics }),
   addChartAnnotation: (annotation) => update({ chartAnnotations: [...state.chartAnnotations, annotation] }), addResearchFinding: (finding) => update({ researchFindings: [...state.researchFindings, finding] }),
-  setResearchUniverse: (researchUniverse) => update({ researchUniverse: [...new Set(researchUniverse)] }), setUniverseStudy: (universeStudy) => update({ universeStudy }), setParameterSearch: (parameterSearch) => update({ parameterSearch }),
+  setResearchUniverse: (researchUniverse) => update({ researchUniverse: [...new Set(researchUniverse)], universeStudy: null, universalParameterSearch: null }), setUniverseStudy: (universeStudy) => update({ universeStudy }), setParameterSearch: (parameterSearch) => update({ parameterSearch }), setUniversalParameterSearch: (universalParameterSearch) => update({ universalParameterSearch }),
   setHistoricalTrades: (historicalTrades, tradeStudyStatistics) => update({ historicalTrades, tradeStudyStatistics, selectedTradeId: historicalTrades[0]?.id ?? null }), selectTrade: (selectedTradeId) => update({ selectedTradeId }),
   clearResearchState: () => update({ researchConditions: [], marketEvents: [], selectedEventId: null, eventStudyResults: [], chartAnnotations: [], researchFindings: [], visibleChartRange: null, historicalTrades: [], selectedTradeId: null, tradeStudyStatistics: null }),
   addAgentActivity: (entry) => update({ agentActivity: [...state.agentActivity.slice(-49), entry] }), updateAgentActivity: (id, partial) => update({ agentActivity: state.agentActivity.map((entry) => entry.id === id ? { ...entry, ...partial } : entry) }),
-  setLoading: (loading) => update({ loading }), setError: (error) => update({ error }),
+  setLoading: (loading) => update({ loading }), setProgress: (progress) => update({ progress }), setError: (error) => update({ error }),
 }
 export const workspaceStore: WorkspaceStore = {
   get activeAsset() { return state.activeAsset }, get activeTimeframe() { return state.activeTimeframe }, get availableTimeframes() { return state.availableTimeframes },
   get canonicalDataset() { return state.canonicalDataset }, get selectedDataset() { return state.selectedDataset }, get visibleChartRange() { return state.visibleChartRange },
   get activeIndicators() { return state.activeIndicators }, get researchConditions() { return state.researchConditions }, get marketEvents() { return state.marketEvents }, get selectedEventId() { return state.selectedEventId }, get eventStudyResults() { return state.eventStudyResults },
   get chartAnnotations() { return state.chartAnnotations }, get researchFindings() { return state.researchFindings }, get agentActivity() { return state.agentActivity }, get quantitativeMetrics() { return state.quantitativeMetrics },
-  get researchUniverse() { return state.researchUniverse }, get universeStudy() { return state.universeStudy }, get parameterSearch() { return state.parameterSearch },
+  get researchUniverse() { return state.researchUniverse }, get universeStudy() { return state.universeStudy }, get parameterSearch() { return state.parameterSearch }, get universalParameterSearch() { return state.universalParameterSearch },
   get historicalTrades() { return state.historicalTrades }, get selectedTradeId() { return state.selectedTradeId }, get tradeStudyStatistics() { return state.tradeStudyStatistics },
-  get loading() { return state.loading }, get error() { return state.error }, ...actions,
+  get loading() { return state.loading }, get progress() { return state.progress }, get error() { return state.error }, ...actions,
 }
 export const getWorkspaceState = () => state
 export function useWorkspaceState(): WorkspaceState { return useSyncExternalStore((listener) => { listeners.add(listener); return () => listeners.delete(listener) }, () => state, () => initialState) }

@@ -21,7 +21,9 @@ export interface UniverseStudy { timeframe: SupportedTimeframe; conditions: Mark
 export type ParameterKey = 'rsiPeriod' | 'rsiThreshold' | 'smaPeriod' | 'emaPeriod' | 'volatilityPeriod' | 'volatilityPercentileThreshold' | 'volatilityLookback'
 export type ParameterSpace = Partial<Record<ParameterKey, number[]>>
 export interface ParameterCandidate { parameters: Record<string, number>; train: StudyMetrics; test: StudyMetrics; robustness: number; neighborCount: number; researchScore: number; stability: 'high' | 'medium' | 'low'; rejected: boolean }
-export interface ParameterSearchResult { symbol: string; timeframe: SupportedTimeframe; horizon: number; trainRatio: number; split: ChronologicalSplit; combinationsTested: number; minimumEvents: number; candidates: ParameterCandidate[]; rejectedLowSample: number }
+export interface ParameterSearchResult { symbol: string; timeframe: SupportedTimeframe; conditions: MarketCondition[]; horizon: number; trainRatio: number; split: ChronologicalSplit; combinationsTested: number; minimumEvents: number; candidates: ParameterCandidate[]; rejectedLowSample: number }
+export interface UniversalParameterCandidate { parameters: Record<string, number>; crossAssetScore: number; perAsset: ParameterCandidate[] }
+export interface UniversalParameterSearchResult { timeframe: SupportedTimeframe; conditions: MarketCondition[]; combinationsTested: number; commonRange: { start: number; end: number }; candidates: UniversalParameterCandidate[] }
 
 const finite = (value: number) => Number.isFinite(value)
 const clamp = (value: number, min = 0, max = 100) => Math.max(min, Math.min(max, value))
@@ -142,11 +144,11 @@ export function optimizeParameters(dataset: MarketDataset, input: { timeframe: S
     const researchScore = rejected ? 0 : clamp(candidate.test.score * .60 + candidate.train.score * .15 + robustness * .25)
     return { ...candidate, robustness, neighborCount: adjacentTrainScores.length, researchScore, stability: robustness >= 65 ? 'high' as const : robustness >= 40 ? 'medium' as const : 'low' as const, rejected }
   }).sort((left, right) => right.researchScore - left.researchScore)
-  return { symbol: view.asset.symbol, timeframe: input.timeframe, horizon: input.forwardHorizon, trainRatio: input.trainRatio ?? DEFAULT_TRAIN_RATIO, split, combinationsTested: combinations.length, minimumEvents, candidates: candidates.slice(0, 12), rejectedLowSample: candidates.filter((candidate) => candidate.rejected).length }
+  return { symbol: view.asset.symbol, timeframe: input.timeframe, conditions: input.conditions, horizon: input.forwardHorizon, trainRatio: input.trainRatio ?? DEFAULT_TRAIN_RATIO, split, combinationsTested: combinations.length, minimumEvents, candidates: candidates.slice(0, 12), rejectedLowSample: candidates.filter((candidate) => candidate.rejected).length }
 }
 
 /** One shared configuration is scored by the median asset score, with a failure penalty; a single winner cannot carry the universe. */
-export function optimizeUniverse(datasets: MarketDataset[], input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; minimumEvents?: number }) {
+export function optimizeUniverse(datasets: MarketDataset[], input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; minimumEvents?: number }): UniversalParameterSearchResult {
   const coverage = commonCoverage(datasets, input.timeframe)
   const configurations = valuesFor(input.parameterSpace)
   const assetCaches = new Map(coverage.datasets.map((dataset) => [dataset.asset.symbol, new Map<string, number[]>()]))
@@ -155,5 +157,5 @@ export function optimizeUniverse(datasets: MarketDataset[], input: { timeframe: 
     const scores = perAsset.map((item) => item.researchScore); const failures = scores.filter((score) => score === 0).length
     return { parameters, crossAssetScore: clamp(median(scores) - failures / scores.length * 30), perAsset }
   }).sort((left, right) => right.crossAssetScore - left.crossAssetScore)
-  return { timeframe: input.timeframe, combinationsTested: configurations.length, commonRange: { start: coverage.start, end: coverage.end }, candidates: results.slice(0, 8) }
+  return { timeframe: input.timeframe, conditions: input.conditions, combinationsTested: configurations.length, commonRange: { start: coverage.start, end: coverage.end }, candidates: results.slice(0, 8) }
 }
