@@ -445,3 +445,16 @@ h1 { margin-top: 6px; color: #f0f4f8; font-size: 18px; font-weight: 650; letter-
   .competition-flow li small { overflow: visible; text-overflow: clip; white-space: normal; }
   .trade-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* Strategy-first competition workflow: display the dependency order without narrow cards. */
+.strategy-workflow .competition-flow ol { grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); }
+.strategy-workflow .workflow-step { margin-top: 18px; padding-top: 15px; border-top: 1px solid #243649; }
+.strategy-workflow .workflow-step h2 { margin-bottom: 0; }
+.strategy-workflow .universe-controls { margin-top: 10px; }
+.best-asset-callout { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; padding: 12px; border: 1px solid #316a52; background: linear-gradient(90deg, #0a1d18, #0a1520); }
+.best-asset-callout > div { display: grid; gap: 3px; }
+.best-asset-callout span { color: #77b99a; font: 700 9px/1 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.best-asset-callout strong { color: #d7f0e2; font-size: 14px; }
+.best-asset-callout small { color: #91aa9e; font-size: 10px; }
+.asset-refinement .secondary-button { min-width: 165px; }
+@media (max-width: 760px) { .strategy-workflow .competition-flow ol { grid-template-columns: 1fr; }.best-asset-callout { align-items: stretch; flex-direction: column; }.best-asset-callout .primary-button, .asset-refinement .secondary-button { width: 100%; } }
