@@ -37,15 +37,40 @@ export interface OptimizeUniverseInput { assets?: string[] | 'all'; timeframe: S
 export interface SimulateTradesInput extends TradeSimulationConfig { asset?: string; timeframe?: SupportedTimeframe; eventIds?: string[] }
 
 const universeCache = new Map<string, Promise<MarketDataset>>()
+let backgroundRequestId = 0
+let researchWorker: Worker | null = null
+const workerDatasetIds = new Set<string>()
+
+/** Keeps CPU-heavy grid scans off the UI thread; Node-based tests retain a deterministic synchronous fallback. */
+function runResearchInBackground<T>(task: 'universe-study' | 'parameter-search' | 'universal-search', datasets: MarketDataset[], input: unknown, fallback: () => T): Promise<T> {
+  if (typeof Worker === 'undefined') return Promise.resolve(fallback())
+  return new Promise<T>((resolve, reject) => {
+    const worker = researchWorker ?? new Worker(new URL('../quant/researchWorker.ts', import.meta.url), { type: 'module' })
+    researchWorker = worker
+    const id = ++backgroundRequestId
+    const uncachedDatasets = datasets.filter((dataset) => !workerDatasetIds.has(dataset.id))
+    worker.onmessage = (event: MessageEvent<{ id: number; result?: T; error?: string }>) => {
+      if (event.data.id !== id) return
+      if (event.data.error) reject(new Error(event.data.error))
+      else resolve(event.data.result as T)
+    }
+    worker.onerror = (event) => {
+      worker.terminate(); researchWorker = null; workerDatasetIds.clear()
+      reject(new Error(event.message || 'Background research worker failed.'))
+    }
+    uncachedDatasets.forEach((dataset) => workerDatasetIds.add(dataset.id))
+    worker.postMessage({ id, task, datasets: uncachedDatasets, datasetIds: datasets.map((dataset) => dataset.id), input })
+  })
+}
 
 /** Lets React paint a truthful pre-flight state before CPU-heavy deterministic research begins. */
 const nextPaint = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 async function withResearchProgress<T>(operation: string, total: number, action: () => T | Promise<T>) {
   workspaceStore.setLoading(true); workspaceStore.setError(null)
-  workspaceStore.setProgress({ operation, stage: 'Preparing validated historical data', completed: 1, total })
+  workspaceStore.setProgress({ operation, stage: 'Preparing cached market windows', completed: 1, total })
   try {
     await nextPaint()
-    workspaceStore.setProgress({ operation, stage: 'Running causal calculations', completed: Math.max(2, Math.floor(total * .15)), total })
+    workspaceStore.setProgress({ operation, stage: 'Calculating in the background — chart remains interactive', completed: Math.max(2, Math.floor(total * .15)), total })
     const result = await action()
     workspaceStore.setProgress({ operation, stage: 'Ranking out-of-sample evidence', completed: total, total })
     return result
@@ -305,7 +330,10 @@ export async function runWorkspaceUniverseStudy(input: UniverseStudyInput) {
   if (!Array.isArray(input.conditions) || !input.conditions.length || input.conditions.length > maximumConditions) throw new WorkspaceServiceError('INVALID_CONDITION', `Provide between 1 and ${maximumConditions} conditions.`)
   input.conditions.forEach(validCondition)
   const sources = selectedUniverse(input.assets)
-  const study = await withResearchProgress('Universe study', sources.length, async () => runUniverseStudy(await loadUniverse(sources), input))
+  const study = await withResearchProgress('Universe study', sources.length, async () => {
+    const datasets = await loadUniverse(sources)
+    return runResearchInBackground('universe-study', datasets, input, () => runUniverseStudy(datasets, input))
+  })
   workspaceStore.setResearchUniverse(sources.map((source) => source.symbol)); workspaceStore.setUniverseStudy(study)
   return study
 }
@@ -316,7 +344,8 @@ export async function optimizeWorkspaceParameters(input: OptimizeParametersInput
   if (!symbol) throw new WorkspaceServiceError('NO_ACTIVE_DATASET', 'Specify an asset or load one before parameter research.')
   const source = getSource(symbol); const combinations = Object.values(input.parameterSpace).reduce((total, values) => total * (values?.length ?? 1), 1)
   const result = await withResearchProgress('Robust parameter search', combinations, async () => {
-    const [dataset] = await loadUniverse([source]); return optimizeParameters(dataset, input)
+    const [dataset] = await loadUniverse([source])
+    return runResearchInBackground('parameter-search', [dataset], input, () => optimizeParameters(dataset, input))
   }); workspaceStore.setParameterSearch(result)
   return result
 }
@@ -324,7 +353,10 @@ export async function optimizeWorkspaceParameters(input: OptimizeParametersInput
 export async function optimizeWorkspaceUniverse(input: OptimizeUniverseInput) {
   requireSupportedTimeframe(input.timeframe); input.conditions.forEach(validCondition)
   const sources = selectedUniverse(input.assets); const combinations = Object.values(input.parameterSpace).reduce((total, values) => total * (values?.length ?? 1), 1)
-  const result = await withResearchProgress('Universal robust search', combinations * sources.length, async () => optimizeUniverse(await loadUniverse(sources), input))
+  const result = await withResearchProgress('Universal robust search', combinations * sources.length, async () => {
+    const datasets = await loadUniverse(sources)
+    return runResearchInBackground('universal-search', datasets, input, () => optimizeUniverse(datasets, input))
+  })
   workspaceStore.setResearchUniverse(sources.map((source) => source.symbol)); workspaceStore.setUniversalParameterSearch(result)
   return result
 }
