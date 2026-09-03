@@ -1,0 +1,9 @@
+import { calculateIndicator, getDatasetSummary, getMarketData, type IndicatorInput, type MarketDataInput } from '../services/workspaceService'
+import { runWithActivity } from './toolRuntime'
+import { calculateIndicatorSchema, getDatasetSummarySchema, getMarketDataSchema } from './schemas'
+
+export const marketToolDefinitions: WebMCP.ModelContextTool[] = [
+  { name: 'get_market_data', title: 'Get bounded market data', description: 'Return a bounded set of real OHLCV bars from the active loaded dataset. Use it when raw market values are needed; it never returns the entire source file.', inputSchema: getMarketDataSchema, annotations: { readOnlyHint: true }, execute: (input) => runWithActivity('get_market_data', () => getMarketData(input as unknown as MarketDataInput), (data) => `Returned ${data.barCount} ${data.asset} bars`) },
+  { name: 'calculate_indicator', title: 'Calculate deterministic indicator', description: 'Calculate a supported indicator from the active real OHLCV dataset with QuantMCP’s deterministic quantitative engine. Use the explicit indicator enum and period.', inputSchema: calculateIndicatorSchema, annotations: { readOnlyHint: true }, execute: (input) => runWithActivity('calculate_indicator', () => calculateIndicator(input as unknown as IndicatorInput), (data) => `Calculated ${data.indicator}(${data.period}) with ${data.valueCount} values`) },
+  { name: 'get_dataset_summary', title: 'Get dataset summary', description: 'Read compact metadata and validation information for the active loaded dataset, without returning OHLCV bars.', inputSchema: getDatasetSummarySchema, annotations: { readOnlyHint: true }, execute: (input) => runWithActivity('get_dataset_summary', () => getDatasetSummary(typeof input.asset === 'string' ? input.asset : undefined), (data) => `Read ${data.symbol} dataset summary`) },
+]
