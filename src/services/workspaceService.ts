@@ -114,6 +114,9 @@ export async function activateAsset(asset: string) {
 
 export async function selectDatasetForHuman(asset: string) { return activateAsset(asset) }
 
+/** Human-only demo preparation; it clears visible research rather than inventing an agent result. */
+export function clearResearchForHuman() { workspaceStore.clearResearchState() }
+
 export function getCompactWorkspaceState() {
   const state = getWorkspaceState(); const dataset = state.selectedDataset
   const selectedEvent = state.marketEvents.find((event) => event.id === state.selectedEventId) ?? null

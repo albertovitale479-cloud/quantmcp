@@ -16,6 +16,7 @@ export interface WorkspaceActions {
   setEvents: (events: MarketEvent[]) => void; selectEvent: (eventId: string | null) => void; setEventStudyResults: (results: ForwardReturnSummary[]) => void
   setQuantitativeMetrics: (metrics: QuantMetric[]) => void; addChartAnnotation: (annotation: ChartAnnotation) => void
   addResearchFinding: (finding: ResearchFinding) => void; addAgentActivity: (entry: AgentActivityEntry) => void
+  clearResearchState: () => void
   updateAgentActivity: (id: string, partial: Pick<AgentActivityEntry, 'status' | 'summary' | 'detail'>) => void
   setLoading: (loading: boolean) => void; setError: (error: string | null) => void
 }

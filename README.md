@@ -42,6 +42,21 @@ Researcher selects market and timeframe
        Chart, study, metrics, annotations, activity
 ```
 
+## Quick Demo
+
+Open the deployed app in a compatible ChatGPT browser, select **Guide** or **Try Agent Demo**, then copy one of these prompts into ChatGPT. Try Agent Demo only prepares the real NQ 15m workspace and opens the guide; it does not simulate an agent or invent research output.
+
+1. **Workspace** — “Use QuantMCP's WebMCP tools to tell me the current active asset and timeframe.”
+2. **Research** — “On NQ 15m, find historical periods where price was above SMA(200), RSI(14) was below 35, and volatility was above its 80th percentile. Show the matching events in the workspace.”
+3. **Event study** — “Analyze the 1, 5, 10 and 20 bar forward returns for those events.”
+4. **Human + agent** — “Show me one of the worst historical cases, focus the chart on it, and annotate the event with a concise research note.”
+
+The chart and Research Study show computed event and forward-return results. Agent Activity records genuine tool calls as they happen.
+
+## Using QuantMCP with ChatGPT
+
+Open deployed QuantMCP in a compatible ChatGPT browser. The page exposes its WebMCP tools directly, so no separate MCP server configuration is needed. When the header says **Ready**, the guide shows the actual number of tools registered by the page. Agent Activity is intentionally quiet until a real tool call occurs, then records the active tool, outcome, and timestamp alongside the shared human workspace.
+
 ## WebMCP Tools
 
 | Tool | Access | Purpose |
@@ -100,7 +115,7 @@ Open the local URL printed by Vite. The app loads NQ by default; select another 
 ## Testing WebMCP
 
 1. Use a compatible WebMCP-enabled browser and open the app over HTTPS after deployment (or a local development URL for development testing).
-2. Confirm the header reports `WEBMCP · Ready · 13 Tools`. Unsupported browsers should show `Unavailable` without affecting human controls.
+2. Confirm the header shows `Ready`, the registered tool count, and `Agent actions available`. Unsupported browsers should explain that a compatible ChatGPT browser is required without affecting human controls.
 3. Call `get_workspace_state`, then `set_active_asset` and `set_timeframe`.
 4. Call `query_market_conditions`, `calculate_forward_returns`, `focus_chart_range`, and `annotate_chart`.
 5. Confirm the chart, research study, and Agent Activity panel reflect the same workspace changes.

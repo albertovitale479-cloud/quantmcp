@@ -16,6 +16,7 @@ const actions: WorkspaceActions = {
   setEvents: (marketEvents) => update({ marketEvents, selectedEventId: null }), selectEvent: (selectedEventId) => update({ selectedEventId }),
   setEventStudyResults: (eventStudyResults) => update({ eventStudyResults }), setQuantitativeMetrics: (quantitativeMetrics) => update({ quantitativeMetrics }),
   addChartAnnotation: (annotation) => update({ chartAnnotations: [...state.chartAnnotations, annotation] }), addResearchFinding: (finding) => update({ researchFindings: [...state.researchFindings, finding] }),
+  clearResearchState: () => update({ researchConditions: [], marketEvents: [], selectedEventId: null, eventStudyResults: [], chartAnnotations: [], researchFindings: [], visibleChartRange: null }),
   addAgentActivity: (entry) => update({ agentActivity: [...state.agentActivity.slice(-49), entry] }), updateAgentActivity: (id, partial) => update({ agentActivity: state.agentActivity.map((entry) => entry.id === id ? { ...entry, ...partial } : entry) }),
   setLoading: (loading) => update({ loading }), setError: (error) => update({ error }),
 }

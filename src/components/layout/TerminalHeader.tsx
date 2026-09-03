@@ -1,8 +1,12 @@
-import { registeredWebMcpToolNames, type WebMcpRegistrationStatus } from '../../webmcp/registerTools'
-interface TerminalHeaderProps { webMcpStatus: WebMcpRegistrationStatus; activeAsset: string | null; timeframe: string }
+import type { WebMcpRegistrationStatus } from '../../webmcp/registerTools'
+interface TerminalHeaderProps { webMcpStatus: WebMcpRegistrationStatus; toolCount: number; activeAsset: string | null; timeframe: string; onOpenGuide: () => void; onTryDemo: () => void }
 
-export function TerminalHeader({ webMcpStatus, activeAsset, timeframe }: TerminalHeaderProps) {
-  const label = webMcpStatus === 'registered' ? 'Ready' : webMcpStatus === 'registering' ? 'Registering' : webMcpStatus === 'available' ? 'Available' : webMcpStatus === 'error' ? 'Error' : 'Unavailable'
+export function TerminalHeader({ webMcpStatus, toolCount, activeAsset, timeframe, onOpenGuide, onTryDemo }: TerminalHeaderProps) {
+  const statusCopy = webMcpStatus === 'registered' ? ['Ready', `${toolCount} tools`, 'Agent actions available']
+    : webMcpStatus === 'registering' ? ['Registering', 'Checking tools', 'One moment']
+      : webMcpStatus === 'available' ? ['Available', 'Preparing tools', 'One moment']
+        : webMcpStatus === 'error' ? ['Error', 'Tools unavailable', 'Try a compatible browser']
+          : ['Unavailable', 'Compatible browser required', 'Open in ChatGPT']
 
   return (
     <header className="terminal-header">
@@ -15,7 +19,9 @@ export function TerminalHeader({ webMcpStatus, activeAsset, timeframe }: Termina
       </div>
       <div className="header-meta">
         {activeAsset && <span className="environment-label">{activeAsset} · {timeframe}</span>}
-        <span className={`status-badge status-${webMcpStatus}`} aria-live="polite"><i /> WEBMCP · {label}{webMcpStatus === 'registered' && ` · ${registeredWebMcpToolNames.length} TOOLS`}</span>
+        <span className={`status-badge status-${webMcpStatus}`} aria-live="polite"><i /><span><b>{statusCopy[0]}</b><small>{statusCopy[1]} · {statusCopy[2]}</small></span></span>
+        <button className="header-button" onClick={onOpenGuide}>Guide</button>
+        <button className="header-button primary-header-button" onClick={onTryDemo}>Try Agent Demo</button>
       </div>
     </header>
   )
