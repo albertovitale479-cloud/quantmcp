@@ -23,9 +23,9 @@ function priorExtreme(bars: OHLCVBar[], index: number, period: number, key: 'hig
 function percentileAt(values: number[], index: number, lookback: number): number { if (index < lookback - 1 || !Number.isFinite(values[index])) return Number.NaN; const window = values.slice(index - lookback + 1, index + 1).filter(Number.isFinite); return window.length < lookback ? Number.NaN : window.filter((value) => value <= values[index]).length / window.length * 100 }
 
 /** All values are computed at the matching bar using only that bar and earlier bars. */
-export function scanMarketConditions(bars: OHLCVBar[], symbol: string, conditions: MarketCondition[]): MarketEvent[] {
+export function scanMarketConditions(bars: OHLCVBar[], symbol: string, conditions: MarketCondition[], sharedSeriesCache?: Map<string, number[]>): MarketEvent[] {
   if (!conditions.length) return []
-  const cache = new Map<string, number[]>()
+  const cache = sharedSeriesCache ?? new Map<string, number[]>()
   const series = (kind: string, period: number) => { const key = `${kind}-${period}`; if (!cache.has(key)) cache.set(key, kind === 'sma' ? sma(bars, period) : kind === 'ema' ? ema(bars, period) : kind === 'rsi' ? rsi(bars, period) : kind === 'atr' ? atr(bars, period) : kind === 'volatility' ? rollingVolatility(bars, period) : kind === 'z-score' ? rollingZScore(bars, period) : momentum(bars, period)); return cache.get(key)! }
   return bars.flatMap((bar, barIndex) => {
     const values: Record<string, number> = {}; const matched = conditions.every((condition) => {

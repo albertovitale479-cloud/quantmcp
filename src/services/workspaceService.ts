@@ -7,6 +7,8 @@ import { atr, ema, momentum, rollingStandardDeviation, rollingVolatility, rollin
 import { type MarketCondition, scanMarketConditions } from '../quant/marketScanner'
 import { statisticsAsMetrics } from '../quant/statistics'
 import { getWorkspaceState, workspaceStore } from '../store/workspaceStore'
+import { optimizeParameters, optimizeUniverse, runUniverseStudy, type ParameterSpace } from '../quant/universeResearch'
+import { simulateTrades, tradeStudyStatistics, type TradeSimulationConfig } from '../quant/tradeSimulator'
 
 const maximumBars = 500
 const maximumConditions = 6
@@ -29,6 +31,12 @@ export interface FocusInput extends RangeInput { eventId?: string }
 export interface AnnotationInput { eventId?: string; timestamp?: number; type: ChartAnnotation['type']; label: string; description?: string }
 export interface FindingInput { title: string; summary: string; confidence: ResearchFinding['confidence']; relatedEventIds?: string[] }
 export interface CompareTimeframesInput { asset?: string; timeframes: SupportedTimeframe[]; conditions: MarketCondition[]; forwardHorizons: number[] }
+export interface UniverseStudyInput { assets?: string[] | 'all'; timeframe: SupportedTimeframe; conditions: MarketCondition[]; forwardHorizons: number[]; minimumEvents?: number }
+export interface OptimizeParametersInput { asset?: string; timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; trainRatio?: number; minimumEvents?: number }
+export interface OptimizeUniverseInput { assets?: string[] | 'all'; timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; minimumEvents?: number }
+export interface SimulateTradesInput extends TradeSimulationConfig { asset?: string; timeframe?: SupportedTimeframe; eventIds?: string[] }
+
+const universeCache = new Map<string, Promise<MarketDataset>>()
 
 function requireInteger(value: number, message: string) {
   if (!Number.isInteger(value) || value < 1) throw new WorkspaceServiceError('INVALID_INPUT', message)
@@ -38,6 +46,23 @@ function getSource(asset: string) {
   const source = availableDatasets.find((candidate) => candidate.symbol === asset.trim().toUpperCase())
   if (!source) throw new WorkspaceServiceError('INVALID_ASSET', `Unknown asset “${asset}”. Available assets: ${availableDatasets.map((item) => item.symbol).join(', ')}.`)
   return source
+}
+
+function selectedUniverse(assets?: string[] | 'all') {
+  const requested = assets === 'all' ? availableDatasets.map((source) => source.symbol) : assets ?? getWorkspaceState().researchUniverse
+  const unique = [...new Set(requested.map((asset) => asset.trim().toUpperCase()))]
+  if (!unique.length) throw new WorkspaceServiceError('INVALID_INPUT', 'Select at least one research-universe asset.')
+  return unique.map(getSource)
+}
+
+async function loadUniverse(sources: ReturnType<typeof selectedUniverse>) {
+  const active = getWorkspaceState().canonicalDataset
+  return Promise.all(sources.map((source) => {
+    if (active?.id === source.id) return Promise.resolve(active)
+    let pending = universeCache.get(source.id)
+    if (!pending) { pending = loadDataset(source); universeCache.set(source.id, pending) }
+    return pending
+  }))
 }
 
 function resolveDataset(asset?: string): MarketDataset {
@@ -126,6 +151,8 @@ export function getCompactWorkspaceState() {
     availableTimeframes: state.availableTimeframes,
     activeDataset: dataset ? { id: dataset.id, symbol: dataset.asset.symbol, label: dataset.label, loadedBars: dataset.bars.length, canonicalBars: state.canonicalDataset?.bars.length ?? dataset.bars.length, dateRange: { start: dataset.asset.startDate, end: dataset.asset.endDate }, isPartial: dataset.isPartial, timezone: dataset.asset.timezone, hasVolume: dataset.asset.hasVolume } : null,
     availableAssets: availableDatasets.map((source) => ({ symbol: source.symbol, id: source.id, timeframe: source.timeframe })),
+    researchUniverse: state.researchUniverse,
+    universeStudy: state.universeStudy ? { timeframe: state.universeStudy.timeframe, horizon: state.universeStudy.horizon, commonRange: state.universeStudy.commonRange, rankings: state.universeStudy.assets.map((asset) => ({ symbol: asset.symbol, rank: asset.rank ?? null, researchScore: asset.researchScore, insufficientSample: asset.outOfSampleMetrics.insufficientSample })) } : null,
     visibleChartRange: state.visibleChartRange,
     activeIndicators: state.activeIndicators, researchConditions: state.researchConditions,
     selectedEvent,
@@ -133,6 +160,7 @@ export function getCompactWorkspaceState() {
     eventStudy: state.eventStudyResults.length ? { horizons: state.eventStudyResults.map((item) => item.horizon), resultCount: state.eventStudyResults.length } : null,
     researchFindings: state.researchFindings.map(({ id, title, summary, confidence, createdAt, relatedEventIds }) => ({ id, title, summary, confidence, createdAt, relatedEventIds })),
     quantitativeMetrics: state.quantitativeMetrics,
+    tradeStudy: state.tradeStudyStatistics ? { ...state.tradeStudyStatistics, selectedTradeId: state.selectedTradeId, selectedTrade: state.historicalTrades.find((trade) => trade.id === state.selectedTradeId) ?? null } : null,
   }
 }
 
@@ -191,6 +219,7 @@ export function queryMarketConditions(input: ConditionInput) {
   const events = scanMarketConditions(dataset.bars, dataset.asset.symbol, input.conditions)
   workspaceStore.setResearchConditions(input.conditions.map(conditionDescription))
   workspaceStore.setEvents(events)
+  workspaceStore.setHistoricalTrades([], null)
   workspaceStore.setEventStudyResults([])
   workspaceStore.selectEvent(events[0]?.id ?? null)
   if (events[0]) focusChart({ eventId: events[0].id })
@@ -218,6 +247,33 @@ export function compareTimeframes(input: CompareTimeframesInput) {
   }
 }
 
+/** Reads the same source services as the chart; it neither changes the selected chart nor fabricates a progress value. */
+export async function runWorkspaceUniverseStudy(input: UniverseStudyInput) {
+  requireSupportedTimeframe(input.timeframe)
+  if (!Array.isArray(input.conditions) || !input.conditions.length || input.conditions.length > maximumConditions) throw new WorkspaceServiceError('INVALID_CONDITION', `Provide between 1 and ${maximumConditions} conditions.`)
+  input.conditions.forEach(validCondition)
+  const sources = selectedUniverse(input.assets)
+  const study = runUniverseStudy(await loadUniverse(sources), input)
+  workspaceStore.setResearchUniverse(sources.map((source) => source.symbol)); workspaceStore.setUniverseStudy(study)
+  return study
+}
+
+export async function optimizeWorkspaceParameters(input: OptimizeParametersInput) {
+  requireSupportedTimeframe(input.timeframe); input.conditions.forEach(validCondition)
+  const symbol = input.asset ?? getWorkspaceState().activeAsset?.symbol
+  if (!symbol) throw new WorkspaceServiceError('NO_ACTIVE_DATASET', 'Specify an asset or load one before parameter research.')
+  const source = getSource(symbol); const [dataset] = await loadUniverse([source])
+  const result = optimizeParameters(dataset, input); workspaceStore.setParameterSearch(result)
+  return result
+}
+
+export async function optimizeWorkspaceUniverse(input: OptimizeUniverseInput) {
+  requireSupportedTimeframe(input.timeframe); input.conditions.forEach(validCondition)
+  const sources = selectedUniverse(input.assets); const result = optimizeUniverse(await loadUniverse(sources), input)
+  workspaceStore.setResearchUniverse(sources.map((source) => source.symbol))
+  return result
+}
+
 export function calculateWorkspaceForwardReturns(input: ForwardReturnsInput) {
   const dataset = resolveDataset(input.asset)
   if (!Array.isArray(input.horizons) || !input.horizons.length || input.horizons.length > maximumHorizons) throw new WorkspaceServiceError('INVALID_INPUT', `Provide between 1 and ${maximumHorizons} positive horizons.`)
@@ -232,6 +288,33 @@ export function calculateWorkspaceForwardReturns(input: ForwardReturnsInput) {
   const results = calculateForwardReturns(dataset.bars, events, input.horizons)
   workspaceStore.setEventStudyResults(results)
   return { asset: dataset.asset.symbol, eventCount: events.length, results: results.map(serialiseForwardResult) }
+}
+
+export function simulateWorkspaceTrades(input: SimulateTradesInput) {
+  const dataset = resolveDataset(input.asset)
+  if (input.timeframe && input.timeframe !== dataset.timeframe) throw new WorkspaceServiceError('INVALID_INPUT', `Trade simulation timeframe ${input.timeframe} does not match active ${dataset.timeframe}.`)
+  if (!['long', 'short'].includes(input.direction)) throw new WorkspaceServiceError('INVALID_INPUT', 'direction must be long or short.')
+  if (!['event_close', 'next_bar_open'].includes(input.entryRule ?? 'next_bar_open')) throw new WorkspaceServiceError('INVALID_INPUT', 'entryRule must be event_close or next_bar_open.')
+  if (!['stop_first', 'target_first', 'ambiguous'].includes(input.collisionPolicy ?? 'stop_first')) throw new WorkspaceServiceError('INVALID_INPUT', 'collisionPolicy must be stop_first, target_first, or ambiguous.')
+  const allEvents = getWorkspaceState().marketEvents.filter((event) => event.assetSymbol === dataset.asset.symbol)
+  const events = input.eventIds ? input.eventIds.map((id) => { const event = allEvents.find((candidate) => candidate.id === id); if (!event) throw new WorkspaceServiceError('NO_MARKET_EVENTS', `Event ${id} does not exist for the active dataset.`); return event }) : allEvents
+  if (!events.length) throw new WorkspaceServiceError('NO_MARKET_EVENTS', 'No current market events are available. Run query_market_conditions first.')
+  try {
+    const trades = simulateTrades(dataset.bars, events, dataset.asset.symbol, dataset.timeframe as SupportedTimeframe, input); const statistics = tradeStudyStatistics(trades)
+    workspaceStore.setHistoricalTrades(trades, statistics)
+    if (trades[0]) focusTrade(trades[0].id)
+    const worstTrade = trades.filter((trade) => trade.outcome !== 'ambiguous').sort((left, right) => left.realizedR - right.realizedR)[0] ?? null
+    return { asset: dataset.asset.symbol, timeframe: dataset.timeframe, entryRule: input.entryRule ?? 'next_bar_open', collisionPolicy: input.collisionPolicy ?? 'stop_first', tradeCount: trades.length, selectedTradeId: trades[0]?.id ?? null, worstTrade: worstTrade ? { id: worstTrade.id, outcome: worstTrade.outcome, realizedR: worstTrade.realizedR, entryTimestamp: worstTrade.entryTimestamp } : null, statistics }
+  } catch (error) { throw new WorkspaceServiceError('INVALID_INPUT', error instanceof Error ? error.message : 'Trade simulation configuration is invalid.') }
+}
+
+export function focusTrade(tradeId: string) {
+  const dataset = resolveDataset(); const trade = getWorkspaceState().historicalTrades.find((candidate) => candidate.id === tradeId)
+  if (!trade) throw new WorkspaceServiceError('NO_MARKET_EVENTS', `Historical trade ${tradeId} does not exist in the current workspace.`)
+  const start = Math.max(0, trade.entryIndex - 12); const end = Math.min(dataset.bars.length - 1, trade.exitIndex + 12)
+  const range = { from: dataset.bars[start].timestamp, to: dataset.bars[end].timestamp }
+  workspaceStore.selectTrade(trade.id); workspaceStore.setVisibleChartRange(range)
+  return { trade, range }
 }
 
 function serialiseForwardResult(result: ForwardReturnSummary) {

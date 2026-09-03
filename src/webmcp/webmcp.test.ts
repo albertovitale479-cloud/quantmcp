@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MarketDataset, OHLCVBar } from '../data/types'
 import { WorkspaceServiceError, activateAsset, annotateChart, calculateIndicator, calculateWorkspaceForwardReturns, focusChart, getCompactWorkspaceState, getMarketData, queryMarketConditions } from '../services/workspaceService'
 import { getWorkspaceState, workspaceStore } from '../store/workspaceStore'
+import { researchToolDefinitions } from './researchTools'
 
 const bars: OHLCVBar[] = [10, 10, 10, 20, 18, 16, 17, 19].map((close, index) => ({ timestamp: 1_700_000_000_000 + index * 60_000, open: close, high: close + 1, low: close - 1, close, volume: index + 1 }))
 const dataset: MarketDataset = {
@@ -35,6 +36,25 @@ describe('WebMCP service boundary', () => {
 
   it('rejects invalid assets before attempting a load', async () => {
     await expect(activateAsset('NOT_A_SYMBOL')).rejects.toMatchObject({ code: 'INVALID_ASSET' } satisfies Partial<WorkspaceServiceError>)
+  })
+
+  it('exposes genuine bounded universe and parameter-research tools', async () => {
+    const nq = { ...dataset, id: 'nq', asset: { ...dataset.asset, id: 'nq', symbol: 'NQ', source: 'nq-demo-1m.txt' } }
+    workspaceStore.selectDataset(nq)
+    const parameter = researchToolDefinitions.find((tool) => tool.name === 'optimize_parameters')!
+    const universe = researchToolDefinitions.find((tool) => tool.name === 'run_universe_study')!
+    const parameterResult = await parameter.execute({ timeframe: '1m', conditions: [{ kind: 'sma', period: 2, comparator: 'above' }], parameterSpace: { smaPeriod: [2, 3] }, forwardHorizon: 1, minimumEvents: 1 }, {} as never) as { success: boolean }
+    const universeResult = await universe.execute({ assets: ['NQ'], timeframe: '1m', conditions: [{ kind: 'sma', period: 2, comparator: 'above' }], forwardHorizons: [1], minimumEvents: 1 }, {} as never) as { success: boolean }
+    expect(parameterResult.success).toBe(true); expect(universeResult.success).toBe(true); expect(getWorkspaceState().universeStudy?.assets).toHaveLength(1)
+  })
+
+  it('simulates and focuses historical trades through real WebMCP tools', async () => {
+    const nq = { ...dataset, id: 'nq', asset: { ...dataset.asset, id: 'nq', symbol: 'NQ', source: 'nq-demo-1m.txt' } }
+    workspaceStore.selectDataset(nq); workspaceStore.setEvents([{ id: 'NQ-event', timestamp: nq.bars[1].timestamp, barIndex: 1, assetSymbol: 'NQ', conditionsMatched: ['fixture'], values: {} }])
+    const simulate = researchToolDefinitions.find((tool) => tool.name === 'simulate_trades')!; const focus = researchToolDefinitions.find((tool) => tool.name === 'focus_trade')!
+    const simulation = await simulate.execute({ direction: 'long', entryRule: 'next_bar_open', stop: { type: 'fixed_percent', percent: .05 }, target: { type: 'r_multiple', multiple: 2 }, maxHoldingBars: 3, collisionPolicy: 'stop_first' }, {} as never) as { success: boolean }
+    const tradeId = getWorkspaceState().historicalTrades[0].id; const focused = await focus.execute({ tradeId }, {} as never) as { success: boolean }
+    expect(simulation.success).toBe(true); expect(focused.success).toBe(true); expect(getWorkspaceState().selectedTradeId).toBe(tradeId)
   })
 })
 

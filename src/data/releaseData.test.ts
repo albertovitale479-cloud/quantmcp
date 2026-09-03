@@ -11,6 +11,7 @@ import { workspaceStore } from '../store/workspaceStore'
 import { researchToolDefinitions } from '../webmcp/researchTools'
 import { workspaceToolDefinitions } from '../webmcp/workspaceTools'
 import { getWorkspaceState } from '../store/workspaceStore'
+import { availableDatasets } from './datasets'
 
 const releaseSources = [
   ['6B', '6b-demo-1m.txt', 53321], ['6C', '6c-demo-1m.txt', 49150], ['6E', '6e-demo-1m.txt', 48863], ['ES', 'es-demo-1m.txt', 48018],
@@ -23,6 +24,11 @@ function fixture(symbol: string, filename: string, bars: MarketDataset['bars']):
 }
 
 describe('release demo datasets', () => {
+  it('keeps each deployed symbol mapped to its audited unique source file', () => {
+    expect(availableDatasets.map((source) => [source.symbol, source.filename, source.auditedBarCount])).toEqual(releaseSources)
+    expect(new Set(availableDatasets.map((source) => source.filename)).size).toBe(availableDatasets.length)
+  })
+
   it.each(releaseSources)('%s is complete, chronological, and sufficient across all supported timeframes', (symbol, filename, expectedRows) => {
     void symbol
     const parsed = parseReleaseData(filename)
@@ -49,12 +55,16 @@ describe('release demo datasets', () => {
     const study = await (researchToolDefinitions.find((tool) => tool.name === 'calculate_forward_returns')!.execute({ horizons: [1, 5, 10, 20] }, {} as never) as Promise<{ success: boolean }>)
     expect(study.success).toBe(true)
     expect(getWorkspaceState().eventStudyResults.every((result) => result.sampleSize > 0)).toBe(true)
+    const tradeSimulation = await (researchToolDefinitions.find((tool) => tool.name === 'simulate_trades')!.execute({ direction: 'long', entryRule: 'next_bar_open', stop: { type: 'atr', period: 14, multiplier: 1 }, target: { type: 'r_multiple', multiple: 2 }, maxHoldingBars: 20, collisionPolicy: 'stop_first' }, {} as never) as Promise<{ success: boolean }>)
+    expect(tradeSimulation.success).toBe(true); expect(getWorkspaceState().historicalTrades.length).toBeGreaterThan(0)
+    const tradeFocus = await (researchToolDefinitions.find((tool) => tool.name === 'focus_trade')!.execute({ tradeId: getWorkspaceState().historicalTrades[0].id }, {} as never) as Promise<{ success: boolean }>)
+    expect(tradeFocus.success).toBe(true); expect(getWorkspaceState().selectedTradeId).toBe(getWorkspaceState().historicalTrades[0].id)
     const event = getWorkspaceState().marketEvents[0]
     const focus = await (workspaceToolDefinitions.find((tool) => tool.name === 'focus_chart_range')!.execute({ eventId: event.id }, {} as never) as Promise<{ success: boolean }>)
     const annotation = await (researchToolDefinitions.find((tool) => tool.name === 'annotate_chart')!.execute({ eventId: event.id, type: 'note', label: 'Release data validation' }, {} as never) as Promise<{ success: boolean }>)
     expect(focus.success).toBe(true); expect(annotation.success).toBe(true)
-    expect(getWorkspaceState().agentActivity.slice(-4).every((entry) => entry.status === 'success')).toBe(true)
+    expect(getWorkspaceState().agentActivity.slice(-6).every((entry) => entry.status === 'success')).toBe(true)
     expect(calculateForwardReturns(bars, getWorkspaceState().marketEvents, [1, 5, 10, 20]).every((result) => result.sampleSize > 0)).toBe(true)
     expect(scanMarketConditions(bars, 'NQ', conditions).length).toBe(getWorkspaceState().marketEvents.length)
-  })
+  }, 30_000)
 })

@@ -41,3 +41,37 @@ export const annotateChartSchema = { type: 'object', additionalProperties: false
 export const createResearchFindingSchema = { type: 'object', additionalProperties: false, properties: { title: { type: 'string', minLength: 1, maxLength: 120 }, summary: { type: 'string', minLength: 1, maxLength: 600 }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] }, relatedEventIds: { type: 'array', maxItems: 100, items: { type: 'string', minLength: 1, maxLength: 160 } } }, required: ['title', 'summary', 'confidence'] } as const
 export const getDatasetSummarySchema = { type: 'object', additionalProperties: false, properties: { asset: { type: 'string', minLength: 1, maxLength: 12 } } } as const
 export const getSelectedEventSchema = getWorkspaceStateSchema
+
+const parameterValues = { type: 'array', minItems: 1, maxItems: 20, uniqueItems: true, items: { type: 'number', exclusiveMinimum: 0 } } as const
+export const parameterSpaceSchema = { type: 'object', additionalProperties: false, minProperties: 1, properties: {
+  rsiPeriod: parameterValues, rsiThreshold: parameterValues, smaPeriod: parameterValues, emaPeriod: parameterValues,
+  volatilityPeriod: parameterValues, volatilityPercentileThreshold: parameterValues, volatilityLookback: parameterValues,
+} } as const
+const universeAssets = { oneOf: [{ type: 'string', const: 'all' }, { type: 'array', minItems: 1, maxItems: 8, uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 12 } }] } as const
+export const runUniverseStudySchema = { type: 'object', additionalProperties: false, properties: {
+  assets: universeAssets, timeframe: { type: 'string', enum: ['1m', '5m', '15m', '30m', '1h'] }, conditions: marketConditionsSchema,
+  forwardHorizons: { type: 'array', minItems: 1, maxItems: 1, items: { type: 'integer', minimum: 1, maximum: 10000 } }, minimumEvents: { type: 'integer', minimum: 1, maximum: 1000, default: 30 },
+}, required: ['timeframe', 'conditions', 'forwardHorizons'] } as const
+export const optimizeParametersSchema = { type: 'object', additionalProperties: false, properties: {
+  asset: { type: 'string', minLength: 1, maxLength: 12 }, timeframe: { type: 'string', enum: ['1m', '5m', '15m', '30m', '1h'] }, conditions: marketConditionsSchema,
+  parameterSpace: parameterSpaceSchema, forwardHorizon: { type: 'integer', minimum: 1, maximum: 10000 }, trainRatio: { type: 'number', exclusiveMinimum: .5, exclusiveMaximum: .9, default: .7 }, minimumEvents: { type: 'integer', minimum: 1, maximum: 1000, default: 30 },
+}, required: ['timeframe', 'conditions', 'parameterSpace', 'forwardHorizon'] } as const
+export const optimizeUniverseSchema = { type: 'object', additionalProperties: false, properties: {
+  assets: universeAssets, timeframe: { type: 'string', enum: ['1m', '5m', '15m', '30m', '1h'] }, conditions: marketConditionsSchema,
+  parameterSpace: parameterSpaceSchema, forwardHorizon: { type: 'integer', minimum: 1, maximum: 10000 }, minimumEvents: { type: 'integer', minimum: 1, maximum: 1000, default: 30 },
+}, required: ['timeframe', 'conditions', 'parameterSpace', 'forwardHorizon'] } as const
+
+const stopRuleSchema = { oneOf: [
+  { type: 'object', additionalProperties: false, properties: { type: { const: 'fixed_percent' }, percent: { type: 'number', exclusiveMinimum: 0, maximum: 1 } }, required: ['type', 'percent'] },
+  { type: 'object', additionalProperties: false, properties: { type: { const: 'atr' }, period: { type: 'integer', minimum: 1, maximum: 10000 }, multiplier: { type: 'number', exclusiveMinimum: 0, maximum: 100 } }, required: ['type', 'period', 'multiplier'] },
+] } as const
+const targetRuleSchema = { oneOf: [
+  { type: 'object', additionalProperties: false, properties: { type: { const: 'fixed_percent' }, percent: { type: 'number', exclusiveMinimum: 0, maximum: 1 } }, required: ['type', 'percent'] },
+  { type: 'object', additionalProperties: false, properties: { type: { const: 'atr' }, period: { type: 'integer', minimum: 1, maximum: 10000 }, multiplier: { type: 'number', exclusiveMinimum: 0, maximum: 100 } }, required: ['type', 'period', 'multiplier'] },
+  { type: 'object', additionalProperties: false, properties: { type: { const: 'r_multiple' }, multiple: { type: 'number', exclusiveMinimum: 0, maximum: 100 } }, required: ['type', 'multiple'] },
+] } as const
+export const simulateTradesSchema = { type: 'object', additionalProperties: false, properties: {
+  asset: { type: 'string', minLength: 1, maxLength: 12 }, timeframe: { type: 'string', enum: ['1m', '5m', '15m', '30m', '1h'] }, eventIds: { type: 'array', minItems: 1, maxItems: 1000, items: { type: 'string', minLength: 1, maxLength: 160 } },
+  direction: { type: 'string', enum: ['long', 'short'] }, entryRule: { type: 'string', enum: ['event_close', 'next_bar_open'], default: 'next_bar_open' }, stop: stopRuleSchema, target: targetRuleSchema, maxHoldingBars: { type: 'integer', minimum: 1, maximum: 10000 }, collisionPolicy: { type: 'string', enum: ['stop_first', 'target_first', 'ambiguous'], default: 'stop_first' },
+}, required: ['direction', 'stop', 'target', 'maxHoldingBars'] } as const
+export const focusTradeSchema = { type: 'object', additionalProperties: false, properties: { tradeId: { type: 'string', minLength: 1, maxLength: 220 } }, required: ['tradeId'] } as const
