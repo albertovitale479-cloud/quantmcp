@@ -79,14 +79,14 @@ function explanations(result: Pick<UniverseAssetResult, 'inSampleMetrics' | 'out
   return { strengths, weaknesses }
 }
 
-export function runUniverseStudy(datasets: MarketDataset[], input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; forwardHorizons: number[]; minimumEvents?: number }): UniverseStudy {
+export function runUniverseStudy(datasets: MarketDataset[], input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; forwardHorizons: number[]; minimumEvents?: number }, onProgress?: (completed: number, total: number) => void): UniverseStudy {
   if (!datasets.length) throw new Error('Select at least one asset.')
   if (!input.conditions.length) throw new Error('Provide at least one supported market condition.')
   if (input.forwardHorizons.length !== 1) throw new Error('Universe rankings require exactly one forward horizon; assets are never ranked across different horizons.')
   const horizon = input.forwardHorizons[0]; const minimumEvents = input.minimumEvents ?? DEFAULT_MINIMUM_EVENTS
   if (!Number.isInteger(horizon) || horizon < 1 || !Number.isInteger(minimumEvents) || minimumEvents < 1) throw new Error('forward horizon and minimumEvents must be positive integers.')
   const coverage = commonCoverage(datasets, input.timeframe)
-  const assets = coverage.datasets.map((dataset) => {
+  const assets = coverage.datasets.map((dataset, index) => {
     const split = chronologicalSplit(dataset.bars)
     const all = metricsFor(dataset.bars, dataset.asset.symbol, input.conditions, horizon, 0, dataset.bars.length, minimumEvents)
     const train = metricsFor(dataset.bars, dataset.asset.symbol, input.conditions, horizon, split.trainStart, split.trainEnd, minimumEvents)
@@ -94,6 +94,7 @@ export function runUniverseStudy(datasets: MarketDataset[], input: { timeframe: 
     // OOS dominates. In-sample only rewards repeatability, never selects a high train-only spike.
     const researchScore = test.insufficientSample ? 0 : clamp(test.score * .70 + train.score * .20 + (test.score >= train.score * .7 ? 10 : 0))
     const item: UniverseAssetResult = { symbol: dataset.asset.symbol, timeframe: input.timeframe, dateRange: { start: coverage.start, end: coverage.end }, dataCoverage: dataset.bars.length, metrics: all, inSampleMetrics: train, outOfSampleMetrics: test, researchScore, strengths: [], weaknesses: [] }
+    onProgress?.(index + 1, coverage.datasets.length)
     return { ...item, ...explanations(item) }
   }).sort((left, right) => right.researchScore - left.researchScore || left.symbol.localeCompare(right.symbol)).map((item, index) => ({ ...item, rank: item.researchScore > 0 ? index + 1 : undefined }))
   return { timeframe: input.timeframe, conditions: input.conditions, horizon, commonRange: { start: coverage.start, end: coverage.end }, minimumEvents, assets, excludedSymbols: assets.filter((asset) => asset.outOfSampleMetrics.insufficientSample).map((asset) => asset.symbol) }
@@ -126,13 +127,14 @@ export function applyParameters(conditions: MarketCondition[], parameters: Recor
 
 function neighbors(left: Record<string, number>, right: Record<string, number>, keys: string[]) { return keys.filter((key) => left[key] !== right[key]).length === 1 }
 
-export function optimizeParameters(dataset: MarketDataset, input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; trainRatio?: number; minimumEvents?: number }, seriesCache = new Map<string, number[]>): ParameterSearchResult {
+export function optimizeParameters(dataset: MarketDataset, input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; trainRatio?: number; minimumEvents?: number }, seriesCache = new Map<string, number[]>(), onProgress?: (completed: number, total: number) => void): ParameterSearchResult {
   const view = deriveTimeframeDataset(dataset, input.timeframe); const split = chronologicalSplit(view.bars, input.trainRatio)
   const minimumEvents = input.minimumEvents ?? DEFAULT_MINIMUM_EVENTS; const combinations = valuesFor(input.parameterSpace); const keys = Object.keys(input.parameterSpace)
-  const preliminary = combinations.map((parameters) => {
+  const preliminary = combinations.map((parameters, index) => {
     const conditions = applyParameters(input.conditions, parameters)
     const train = metricsFor(view.bars, view.asset.symbol, conditions, input.forwardHorizon, split.trainStart, split.trainEnd, minimumEvents, seriesCache)
     const test = metricsFor(view.bars, view.asset.symbol, conditions, input.forwardHorizon, split.testStart, split.testEnd, minimumEvents, seriesCache)
+    if ((index + 1) % 4 === 0 || index === combinations.length - 1) onProgress?.(index + 1, combinations.length)
     return { parameters, train, test }
   })
   const candidates = preliminary.map((candidate) => {
@@ -148,12 +150,17 @@ export function optimizeParameters(dataset: MarketDataset, input: { timeframe: S
 }
 
 /** One shared configuration is scored by the median asset score, with a failure penalty; a single winner cannot carry the universe. */
-export function optimizeUniverse(datasets: MarketDataset[], input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; minimumEvents?: number }): UniversalParameterSearchResult {
+export function optimizeUniverse(datasets: MarketDataset[], input: { timeframe: SupportedTimeframe; conditions: MarketCondition[]; parameterSpace: ParameterSpace; forwardHorizon: number; minimumEvents?: number }, onProgress?: (completed: number, total: number) => void): UniversalParameterSearchResult {
   const coverage = commonCoverage(datasets, input.timeframe)
   const configurations = valuesFor(input.parameterSpace)
   const assetCaches = new Map(coverage.datasets.map((dataset) => [dataset.asset.symbol, new Map<string, number[]>()]))
+  let completed = 0; const total = configurations.length * coverage.datasets.length
   const results = configurations.map((parameters) => {
-    const perAsset = coverage.datasets.map((dataset) => optimizeParameters(dataset, { ...input, parameterSpace: Object.fromEntries(Object.entries(parameters).map(([key, value]) => [key, [value]])) as ParameterSpace }, assetCaches.get(dataset.asset.symbol)! ).candidates[0])
+    const perAsset = coverage.datasets.map((dataset) => {
+      const candidate = optimizeParameters(dataset, { ...input, parameterSpace: Object.fromEntries(Object.entries(parameters).map(([key, value]) => [key, [value]])) as ParameterSpace }, assetCaches.get(dataset.asset.symbol)! ).candidates[0]
+      onProgress?.(++completed, total)
+      return candidate
+    })
     const scores = perAsset.map((item) => item.researchScore); const failures = scores.filter((score) => score === 0).length
     return { parameters, crossAssetScore: clamp(median(scores) - failures / scores.length * 30), perAsset }
   }).sort((left, right) => right.crossAssetScore - left.crossAssetScore)

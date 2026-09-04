@@ -3,7 +3,9 @@ import { availableTimeframes } from '../data/timeframeAggregator'
 import { availableDatasets } from '../data/datasets'
 import type { WorkspaceActions, WorkspaceState, WorkspaceStore } from './types'
 
-const initialState: WorkspaceState = { activeAsset: null, activeTimeframe: '1m', availableTimeframes, canonicalDataset: null, selectedDataset: null, visibleChartRange: null, activeIndicators: [], researchConditions: [], marketEvents: [], selectedEventId: null, eventStudyResults: [], chartAnnotations: [], researchFindings: [], agentActivity: [], researchUniverse: availableDatasets.map((source) => source.symbol), universeStudy: null, parameterSearch: null, universalParameterSearch: null, historicalTrades: [], selectedTradeId: null, tradeStudyStatistics: null, quantitativeMetrics: [], loading: false, progress: null, error: null }
+const intradayCoreSymbols = new Set(['ES', 'GC', 'NQ', 'YM'])
+const initialResearchUniverse = availableDatasets.filter((source) => intradayCoreSymbols.has(source.symbol)).map((source) => source.symbol)
+const initialState: WorkspaceState = { activeAsset: null, activeTimeframe: '1m', availableTimeframes, canonicalDataset: null, selectedDataset: null, visibleChartRange: null, activeIndicators: [], researchConditions: [], marketEvents: [], selectedEventId: null, eventStudyResults: [], chartAnnotations: [], researchFindings: [], agentActivity: [], researchUniverse: initialResearchUniverse, universeStudy: null, parameterSearch: null, universalParameterSearch: null, historicalTrades: [], selectedTradeId: null, tradeStudyStatistics: null, quantitativeMetrics: [], loading: false, progress: null, error: null }
 let state = initialState
 const listeners = new Set<() => void>()
 function update(partial: Partial<WorkspaceState>) { state = { ...state, ...partial }; listeners.forEach((listener) => listener()) }

@@ -48,7 +48,15 @@ export function simulateTrade(bars: OHLCVBar[], event: MarketEvent, asset: strin
   return { id: `trade-${asset}-${event.timestamp}-${config.direction}-${entryRule}`, asset, timeframe, direction: config.direction, entryIndex, entryTimestamp: entryBar.timestamp, entryPrice, stopPrice, targetPrice, exitIndex, exitTimestamp: bars[exitIndex].timestamp, exitPrice, outcome, riskPoints: distance.stopDistance, rewardPoints: distance.targetDistance, riskRewardRatio: distance.targetDistance / distance.stopDistance, realizedR: signedReturn / distance.stopDistance, barsHeld: exitIndex - entryIndex, sourceEventId: event.id, sourceConditions: event.conditionsMatched }
 }
 
-export function simulateTrades(bars: OHLCVBar[], events: MarketEvent[], asset: string, timeframe: SupportedTimeframe, config: TradeSimulationConfig) { return events.map((event) => simulateTrade(bars, event, asset, timeframe, config)).filter((trade): trade is HistoricalTrade => trade !== null) }
+export function simulateTrades(bars: OHLCVBar[], events: MarketEvent[], asset: string, timeframe: SupportedTimeframe, config: TradeSimulationConfig, onProgress?: (completed: number, total: number) => void) {
+  const trades: HistoricalTrade[] = []
+  events.forEach((event, index) => {
+    const trade = simulateTrade(bars, event, asset, timeframe, config)
+    if (trade) trades.push(trade)
+    if ((index + 1) % 100 === 0 || index + 1 === events.length) onProgress?.(index + 1, events.length)
+  })
+  return trades
+}
 
 /** Ambiguous OHLC collisions are retained for inspection but excluded from aggregate outcome statistics. */
 export function tradeStudyStatistics(trades: HistoricalTrade[]): TradeStudyStatistics {

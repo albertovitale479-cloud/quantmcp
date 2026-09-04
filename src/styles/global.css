@@ -457,4 +457,6 @@ h1 { margin-top: 6px; color: #f0f4f8; font-size: 18px; font-weight: 650; letter-
 .best-asset-callout strong { color: #d7f0e2; font-size: 14px; }
 .best-asset-callout small { color: #91aa9e; font-size: 10px; }
 .asset-refinement .secondary-button { min-width: 165px; }
+.trade-more { display: block; width: 100%; margin-top: 8px; }
+.universe-presets { display: inline-flex; gap: 5px; }
 @media (max-width: 760px) { .strategy-workflow .competition-flow ol { grid-template-columns: 1fr; }.best-asset-callout { align-items: stretch; flex-direction: column; }.best-asset-callout .primary-button, .asset-refinement .secondary-button { width: 100%; } }

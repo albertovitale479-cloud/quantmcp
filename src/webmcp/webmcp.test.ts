@@ -20,16 +20,16 @@ describe('WebMCP service boundary', () => {
     expect(result.bars).toHaveLength(3); expect(result.truncated).toBe(true)
   })
 
-  it('uses the deterministic indicator, scanner, and event-study engines', () => {
+  it('uses the deterministic indicator, scanner, and event-study engines', async () => {
     loadFixture(); expect(calculateIndicator({ indicator: 'SMA', period: 3, maxValues: 10 }).latest.value).toBeCloseTo(17.3333333)
-    const scan = queryMarketConditions({ conditions: [{ kind: 'sma', period: 3, comparator: 'above' }] })
+    const scan = await queryMarketConditions({ conditions: [{ kind: 'sma', period: 3, comparator: 'above' }] })
     expect(scan.eventCount).toBeGreaterThan(0); expect(getWorkspaceState().marketEvents).toHaveLength(scan.eventCount)
-    const study = calculateWorkspaceForwardReturns({ horizons: [1, 2] })
+    const study = await calculateWorkspaceForwardReturns({ horizons: [1, 2] })
     expect(study.results).toHaveLength(2); expect(getWorkspaceState().eventStudyResults).toHaveLength(2)
   })
 
-  it('mutates shared focus and visible annotation state', () => {
-    loadFixture(); const scan = queryMarketConditions({ conditions: [{ kind: 'sma', period: 3, comparator: 'above' }] }); const event = scan.events[0]
+  it('mutates shared focus and visible annotation state', async () => {
+    loadFixture(); const scan = await queryMarketConditions({ conditions: [{ kind: 'sma', period: 3, comparator: 'above' }] }); const event = scan.events[0]
     const focused = focusChart({ eventId: event.id }); const annotation = annotateChart({ eventId: event.id, type: 'note', label: 'Observed historical condition' })
     expect(getWorkspaceState().visibleChartRange).toEqual(focused.range); expect(getWorkspaceState().chartAnnotations.at(-1)?.id).toBe(annotation.annotation.id)
   })

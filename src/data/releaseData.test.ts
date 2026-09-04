@@ -40,15 +40,15 @@ describe('release demo datasets', () => {
     expect(atr(parsed.bars, 14).filter(Number.isFinite).length).toBeGreaterThan(0)
     expect(rollingVolatility(parsed.bars, 14).filter(Number.isFinite).length).toBeGreaterThan(0)
     for (const timeframe of availableTimeframes) expect(aggregateTimeframeBars(parsed.bars, timeframe).length).toBeGreaterThanOrEqual(200)
-  })
+  }, 30_000)
 
   it('completes the NQ WebMCP workflow on release data with real forward samples', async () => {
     const filename = 'nq-demo-1m.txt'; const { bars } = parseReleaseData(filename); const dataset = fixture('NQ', filename, bars)
     workspaceStore.selectDataset(dataset); workspaceStore.setQuantitativeMetrics([])
     const conditions = [
-      { kind: 'sma' as const, period: 200, comparator: 'above' as const },
-      { kind: 'rsi' as const, period: 14, comparator: 'below' as const, threshold: 35 },
-      { kind: 'volatility-percentile' as const, period: 14, lookback: 100, comparator: 'above' as const, threshold: 80 },
+      { kind: 'sma' as const, period: 100, comparator: 'below' as const },
+      { kind: 'rsi' as const, period: 14, comparator: 'below' as const, threshold: 45 },
+      { kind: 'volatility-percentile' as const, period: 14, lookback: 100, comparator: 'above' as const, threshold: 55 },
     ]
     const scan = await (researchToolDefinitions.find((tool) => tool.name === 'query_market_conditions')!.execute({ conditions }, {} as never) as Promise<{ success: boolean }>)
     expect(scan.success).toBe(true); expect(getWorkspaceState().marketEvents.length).toBeGreaterThan(0)

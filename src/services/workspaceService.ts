@@ -8,11 +8,12 @@ import { type MarketCondition, scanMarketConditions } from '../quant/marketScann
 import { statisticsAsMetrics } from '../quant/statistics'
 import { getWorkspaceState, workspaceStore } from '../store/workspaceStore'
 import { applyParameters, optimizeParameters, optimizeUniverse, runUniverseStudy, type ParameterSpace } from '../quant/universeResearch'
-import { simulateTrades, tradeStudyStatistics, type TradeSimulationConfig } from '../quant/tradeSimulator'
+import { simulateTrades, tradeStudyStatistics, type HistoricalTrade, type TradeSimulationConfig, type TradeStudyStatistics } from '../quant/tradeSimulator'
 
 const maximumBars = 500
 const maximumConditions = 6
 const maximumHorizons = 8
+const maximumUniversalCombinations = 128
 const indicatorNames = ['SMA', 'EMA', 'RSI', 'ATR', 'ROLLING_VOLATILITY', 'ROLLING_STANDARD_DEVIATION', 'ROLLING_Z_SCORE', 'MOMENTUM'] as const
 
 export type IndicatorName = typeof indicatorNames[number]
@@ -40,38 +41,56 @@ const universeCache = new Map<string, Promise<MarketDataset>>()
 let backgroundRequestId = 0
 let researchWorker: Worker | null = null
 const workerDatasetIds = new Set<string>()
+const workerDatasetKey = (dataset: MarketDataset) => `${dataset.id}:${dataset.timeframe}`
+type BackgroundTask = 'universe-study' | 'parameter-search' | 'universal-search' | 'condition-scan' | 'event-study' | 'timeframe-compare' | 'trade-simulation'
+interface PendingResearchRequest<T> { resolve: (value: T) => void; reject: (reason?: unknown) => void; onProgress?: (completed: number, total: number) => void }
+const pendingResearchRequests = new Map<number, PendingResearchRequest<unknown>>()
+
+function terminateResearchWorker(message: string) {
+  researchWorker?.terminate(); researchWorker = null; workerDatasetIds.clear()
+  pendingResearchRequests.forEach((request) => request.reject(new Error(message)))
+  pendingResearchRequests.clear()
+}
+
+function getResearchWorker() {
+  if (researchWorker) return researchWorker
+  const worker = new Worker(new URL('../quant/researchWorker.ts', import.meta.url), { type: 'module' })
+  worker.onmessage = (event: MessageEvent<{ id: number; result?: unknown; error?: string; progress?: { completed: number; total: number } }>) => {
+    const request = pendingResearchRequests.get(event.data.id)
+    if (!request) return
+    if (event.data.progress) { request.onProgress?.(event.data.progress.completed, event.data.progress.total); return }
+    pendingResearchRequests.delete(event.data.id)
+    if (event.data.error) request.reject(new Error(event.data.error))
+    else request.resolve(event.data.result)
+  }
+  worker.onerror = (event) => terminateResearchWorker(event.message || 'Background research worker failed.')
+  researchWorker = worker
+  return worker
+}
 
 /** Keeps CPU-heavy grid scans off the UI thread; Node-based tests retain a deterministic synchronous fallback. */
-function runResearchInBackground<T>(task: 'universe-study' | 'parameter-search' | 'universal-search', datasets: MarketDataset[], input: unknown, fallback: () => T): Promise<T> {
+function runResearchInBackground<T>(task: BackgroundTask, datasets: MarketDataset[], input: unknown, fallback: () => T, onProgress?: (completed: number, total: number) => void): Promise<T> {
   if (typeof Worker === 'undefined') return Promise.resolve(fallback())
   return new Promise<T>((resolve, reject) => {
-    const worker = researchWorker ?? new Worker(new URL('../quant/researchWorker.ts', import.meta.url), { type: 'module' })
-    researchWorker = worker
+    const worker = getResearchWorker()
     const id = ++backgroundRequestId
-    const uncachedDatasets = datasets.filter((dataset) => !workerDatasetIds.has(dataset.id))
-    worker.onmessage = (event: MessageEvent<{ id: number; result?: T; error?: string }>) => {
-      if (event.data.id !== id) return
-      if (event.data.error) reject(new Error(event.data.error))
-      else resolve(event.data.result as T)
-    }
-    worker.onerror = (event) => {
-      worker.terminate(); researchWorker = null; workerDatasetIds.clear()
-      reject(new Error(event.message || 'Background research worker failed.'))
-    }
-    uncachedDatasets.forEach((dataset) => workerDatasetIds.add(dataset.id))
-    worker.postMessage({ id, task, datasets: uncachedDatasets, datasetIds: datasets.map((dataset) => dataset.id), input })
+    const uncachedDatasets = datasets.filter((dataset) => !workerDatasetIds.has(workerDatasetKey(dataset)))
+    pendingResearchRequests.set(id, { resolve: resolve as (value: unknown) => void, reject, onProgress })
+    uncachedDatasets.forEach((dataset) => workerDatasetIds.add(workerDatasetKey(dataset)))
+    worker.postMessage({ id, task, datasets: uncachedDatasets, datasetIds: datasets.map(workerDatasetKey), input })
   })
 }
 
 /** Lets React paint a truthful pre-flight state before CPU-heavy deterministic research begins. */
 const nextPaint = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
-async function withResearchProgress<T>(operation: string, total: number, action: () => T | Promise<T>) {
+async function withResearchProgress<T>(operation: string, total: number, action: (report: (completed: number, stage?: string) => void) => T | Promise<T>) {
   workspaceStore.setLoading(true); workspaceStore.setError(null)
   workspaceStore.setProgress({ operation, stage: 'Preparing cached market windows', completed: 1, total })
   try {
     await nextPaint()
     workspaceStore.setProgress({ operation, stage: 'Calculating in the background — chart remains interactive', completed: Math.max(2, Math.floor(total * .15)), total })
-    const result = await action()
+    const report = (completed: number, stage = 'Calculating in the background — chart remains interactive') => workspaceStore.setProgress({ operation, stage, completed: Math.max(1, Math.min(total, completed)), total })
+    const result = await action(report)
     workspaceStore.setProgress({ operation, stage: 'Ranking out-of-sample evidence', completed: total, total })
     return result
   } finally {
@@ -261,11 +280,11 @@ export function calculateIndicator(input: IndicatorInput) {
   return { asset: dataset.asset.symbol, timeframe: dataset.timeframe, indicator: input.indicator, period: input.period, requestedRange: range, valueCount: bounded.length, truncated: output.length > bounded.length, latest: bounded.at(-1)!, values: bounded }
 }
 
-export function queryMarketConditions(input: ConditionInput) {
+export async function queryMarketConditions(input: ConditionInput) {
   const dataset = resolveDataset(input.asset)
   if (!Array.isArray(input.conditions) || !input.conditions.length || input.conditions.length > maximumConditions) throw new WorkspaceServiceError('INVALID_CONDITION', `Provide between 1 and ${maximumConditions} conditions.`)
   input.conditions.forEach(validCondition)
-  const events = scanMarketConditions(dataset.bars, dataset.asset.symbol, input.conditions)
+  const events = await withResearchProgress('Historical condition scan', 100, async () => runResearchInBackground('condition-scan', [dataset], { conditions: input.conditions }, () => scanMarketConditions(dataset.bars, dataset.asset.symbol, input.conditions)))
   workspaceStore.setResearchConditions(input.conditions.map(conditionDescription))
   workspaceStore.setEvents(events)
   workspaceStore.setHistoricalTrades([], null)
@@ -276,7 +295,7 @@ export function queryMarketConditions(input: ConditionInput) {
 }
 
 /** Promotes the best valid parameter-search result into the shared event-study context. */
-export function applyRecommendedStrategy(asset?: string, options: { preserveEventStudy?: boolean } = {}) {
+export async function applyRecommendedStrategy(asset?: string, options: { preserveEventStudy?: boolean } = {}) {
   const dataset = resolveDataset(asset); const state = getWorkspaceState()
   const assetCandidate = state.parameterSearch?.symbol === dataset.asset.symbol && state.parameterSearch.timeframe === dataset.timeframe ? state.parameterSearch.candidates.find((candidate) => !candidate.rejected) : undefined
   const universalCandidate = !assetCandidate && state.universalParameterSearch?.timeframe === dataset.timeframe ? state.universalParameterSearch.candidates[0] : undefined
@@ -287,13 +306,13 @@ export function applyRecommendedStrategy(asset?: string, options: { preserveEven
   const sameStrategyAsStudy = state.researchConditions.length === descriptions.length
     && state.researchConditions.every((condition, index) => condition === descriptions[index])
   if (!options.preserveEventStudy || !sameStrategyAsStudy) {
-    const result = queryMarketConditions({ asset: dataset.asset.symbol, conditions })
+    const result = await queryMarketConditions({ asset: dataset.asset.symbol, conditions })
     return { ...result, parameterSource: recommendation.source, parameters: recommendation.parameters }
   }
 
   // Trade Simulation is the next stage of the same workflow. Keep a completed Event Study
   // visible when its exact saved robust settings are being reused.
-  const events = scanMarketConditions(dataset.bars, dataset.asset.symbol, conditions)
+  const events = await withResearchProgress('Restoring saved strategy', 100, async () => runResearchInBackground('condition-scan', [dataset], { conditions }, () => scanMarketConditions(dataset.bars, dataset.asset.symbol, conditions)))
   workspaceStore.setResearchConditions(descriptions)
   workspaceStore.setEvents(events)
   workspaceStore.setHistoricalTrades([], null)
@@ -304,7 +323,7 @@ export function applyRecommendedStrategy(asset?: string, options: { preserveEven
 }
 
 /** Runs isolated derived-timeframe analysis and intentionally leaves the human chart untouched. */
-export function compareTimeframes(input: CompareTimeframesInput) {
+export async function compareTimeframes(input: CompareTimeframesInput) {
   const active = resolveDataset(input.asset)
   const canonical = getWorkspaceState().canonicalDataset
   if (!canonical) throw new WorkspaceServiceError('NO_ACTIVE_DATASET', 'No canonical dataset is loaded.')
@@ -313,14 +332,15 @@ export function compareTimeframes(input: CompareTimeframesInput) {
   if (!Array.isArray(input.forwardHorizons) || !input.forwardHorizons.length || input.forwardHorizons.length > maximumHorizons) throw new WorkspaceServiceError('INVALID_INPUT', `Provide between 1 and ${maximumHorizons} positive horizons.`)
   input.timeframes.forEach((timeframe) => requireSupportedTimeframe(timeframe)); input.conditions.forEach(validCondition); input.forwardHorizons.forEach((horizon) => requireInteger(horizon, 'Every horizon must be a positive integer.'))
   const uniqueTimeframes = [...new Set(input.timeframes)]
+  const comparisons = await withResearchProgress('Timeframe comparison', uniqueTimeframes.length, async (report) => runResearchInBackground('timeframe-compare', [canonical], { timeframes: uniqueTimeframes, conditions: input.conditions, forwardHorizons: input.forwardHorizons }, () => uniqueTimeframes.map((timeframe) => {
+    const dataset = deriveTimeframeDataset(canonical, timeframe)
+    const events = scanMarketConditions(dataset.bars, dataset.asset.symbol, input.conditions)
+    return { timeframe, barCount: dataset.bars.length, eventCount: events.length, forwardReturns: calculateForwardReturns(dataset.bars, events, input.forwardHorizons).map((result) => ({ horizon: result.horizon, sampleSize: result.sampleSize, mean: result.mean, median: result.median, winRate: result.winRate })) }
+  }), (completed) => report(completed, 'Scanning isolated derived timeframes')))
   return {
     asset: active.asset.symbol,
     conditions: input.conditions.map(conditionDescription),
-    comparisons: uniqueTimeframes.map((timeframe) => {
-      const dataset = deriveTimeframeDataset(canonical, timeframe)
-      const events = scanMarketConditions(dataset.bars, dataset.asset.symbol, input.conditions)
-      return { timeframe, barCount: dataset.bars.length, eventCount: events.length, forwardReturns: calculateForwardReturns(dataset.bars, events, input.forwardHorizons).map((result) => ({ horizon: result.horizon, sampleSize: result.sampleSize, mean: result.mean, median: result.median, winRate: result.winRate })) }
-    }),
+    comparisons,
   }
 }
 
@@ -330,9 +350,9 @@ export async function runWorkspaceUniverseStudy(input: UniverseStudyInput) {
   if (!Array.isArray(input.conditions) || !input.conditions.length || input.conditions.length > maximumConditions) throw new WorkspaceServiceError('INVALID_CONDITION', `Provide between 1 and ${maximumConditions} conditions.`)
   input.conditions.forEach(validCondition)
   const sources = selectedUniverse(input.assets)
-  const study = await withResearchProgress('Universe study', sources.length, async () => {
+  const study = await withResearchProgress('Universe study', sources.length, async (report) => {
     const datasets = await loadUniverse(sources)
-    return runResearchInBackground('universe-study', datasets, input, () => runUniverseStudy(datasets, input))
+    return runResearchInBackground('universe-study', datasets, input, () => runUniverseStudy(datasets, input), (completed) => report(completed, 'Evaluating each asset with saved universal settings'))
   })
   workspaceStore.setResearchUniverse(sources.map((source) => source.symbol)); workspaceStore.setUniverseStudy(study)
   return study
@@ -343,9 +363,9 @@ export async function optimizeWorkspaceParameters(input: OptimizeParametersInput
   const symbol = input.asset ?? getWorkspaceState().activeAsset?.symbol
   if (!symbol) throw new WorkspaceServiceError('NO_ACTIVE_DATASET', 'Specify an asset or load one before parameter research.')
   const source = getSource(symbol); const combinations = Object.values(input.parameterSpace).reduce((total, values) => total * (values?.length ?? 1), 1)
-  const result = await withResearchProgress('Robust parameter search', combinations, async () => {
+  const result = await withResearchProgress('Robust parameter search', combinations, async (report) => {
     const [dataset] = await loadUniverse([source])
-    return runResearchInBackground('parameter-search', [dataset], input, () => optimizeParameters(dataset, input))
+    return runResearchInBackground('parameter-search', [dataset], input, () => optimizeParameters(dataset, input), (completed) => report(completed, 'Testing parameter combinations in the background'))
   }); workspaceStore.setParameterSearch(result)
   return result
 }
@@ -353,15 +373,16 @@ export async function optimizeWorkspaceParameters(input: OptimizeParametersInput
 export async function optimizeWorkspaceUniverse(input: OptimizeUniverseInput) {
   requireSupportedTimeframe(input.timeframe); input.conditions.forEach(validCondition)
   const sources = selectedUniverse(input.assets); const combinations = Object.values(input.parameterSpace).reduce((total, values) => total * (values?.length ?? 1), 1)
-  const result = await withResearchProgress('Universal robust search', combinations * sources.length, async () => {
+  if (combinations > maximumUniversalCombinations) throw new WorkspaceServiceError('INVALID_INPUT', `Universal parameter search is limited to ${maximumUniversalCombinations} combinations so the shared workspace remains responsive. Narrow the parameter ranges and run focused refinements on the selected best asset.`)
+  const result = await withResearchProgress('Universal robust search', combinations * sources.length, async (report) => {
     const datasets = await loadUniverse(sources)
-    return runResearchInBackground('universal-search', datasets, input, () => optimizeUniverse(datasets, input))
+    return runResearchInBackground('universal-search', datasets, input, () => optimizeUniverse(datasets, input), (completed) => report(completed, 'Evaluating shared settings across the selected assets'))
   })
   workspaceStore.setResearchUniverse(sources.map((source) => source.symbol)); workspaceStore.setUniversalParameterSearch(result)
   return result
 }
 
-export function calculateWorkspaceForwardReturns(input: ForwardReturnsInput) {
+export async function calculateWorkspaceForwardReturns(input: ForwardReturnsInput) {
   const dataset = resolveDataset(input.asset)
   if (!Array.isArray(input.horizons) || !input.horizons.length || input.horizons.length > maximumHorizons) throw new WorkspaceServiceError('INVALID_INPUT', `Provide between 1 and ${maximumHorizons} positive horizons.`)
   input.horizons.forEach((horizon) => requireInteger(horizon, 'Every horizon must be a positive integer.'))
@@ -372,24 +393,35 @@ export function calculateWorkspaceForwardReturns(input: ForwardReturnsInput) {
     return event
   })
   if (!events.length) throw new WorkspaceServiceError('NO_MARKET_EVENTS', 'No market events are available. Call query_market_conditions first.')
-  const results = calculateForwardReturns(dataset.bars, events, input.horizons)
+  const results = await withResearchProgress('Event study', Math.max(1, input.horizons.length), async (report) => {
+    const output = await runResearchInBackground('event-study', [dataset], { events, horizons: input.horizons }, () => calculateForwardReturns(dataset.bars, events, input.horizons))
+    report(input.horizons.length, 'Summarizing forward returns')
+    return output
+  })
   workspaceStore.setEventStudyResults(results)
   return { asset: dataset.asset.symbol, eventCount: events.length, results: results.map(serialiseForwardResult) }
 }
 
-export function simulateWorkspaceTrades(input: SimulateTradesInput) {
+export async function simulateWorkspaceTrades(input: SimulateTradesInput) {
   const dataset = resolveDataset(input.asset)
   if (input.timeframe && input.timeframe !== dataset.timeframe) throw new WorkspaceServiceError('INVALID_INPUT', `Trade simulation timeframe ${input.timeframe} does not match active ${dataset.timeframe}.`)
   if (!['long', 'short'].includes(input.direction)) throw new WorkspaceServiceError('INVALID_INPUT', 'direction must be long or short.')
   if (!['event_close', 'next_bar_open'].includes(input.entryRule ?? 'next_bar_open')) throw new WorkspaceServiceError('INVALID_INPUT', 'entryRule must be event_close or next_bar_open.')
   if (!['stop_first', 'target_first', 'ambiguous'].includes(input.collisionPolicy ?? 'stop_first')) throw new WorkspaceServiceError('INVALID_INPUT', 'collisionPolicy must be stop_first, target_first, or ambiguous.')
   // A manual event selection remains authoritative. Otherwise the next simulation follows the best valid robust region.
-  const recommendation = input.eventIds === undefined ? (() => { try { return applyRecommendedStrategy(dataset.asset.symbol, { preserveEventStudy: true }) } catch { return null } })() : null
+  let recommendation: Awaited<ReturnType<typeof applyRecommendedStrategy>> | null = null
+  if (input.eventIds === undefined) {
+    try { recommendation = await applyRecommendedStrategy(dataset.asset.symbol, { preserveEventStudy: true }) } catch { recommendation = null }
+  }
   const allEvents = getWorkspaceState().marketEvents.filter((event) => event.assetSymbol === dataset.asset.symbol)
   const events = input.eventIds ? input.eventIds.map((id) => { const event = allEvents.find((candidate) => candidate.id === id); if (!event) throw new WorkspaceServiceError('NO_MARKET_EVENTS', `Event ${id} does not exist for the active dataset.`); return event }) : allEvents
   if (!events.length) throw new WorkspaceServiceError('NO_MARKET_EVENTS', 'No current market events are available. Run query_market_conditions first.')
   try {
-    const trades = simulateTrades(dataset.bars, events, dataset.asset.symbol, dataset.timeframe as SupportedTimeframe, input); const statistics = tradeStudyStatistics(trades)
+    const simulation = await withResearchProgress('Trade simulation', Math.max(1, events.length), async (report) => runResearchInBackground<{ trades: HistoricalTrade[]; statistics: TradeStudyStatistics }>('trade-simulation', [dataset], { events, config: input }, () => {
+      const trades = simulateTrades(dataset.bars, events, dataset.asset.symbol, dataset.timeframe as SupportedTimeframe, input, (completed, total) => report(completed, `Resolving stop, target and hold rules · ${completed.toLocaleString()} / ${total.toLocaleString()} signals`))
+      return { trades, statistics: tradeStudyStatistics(trades) }
+    }, (completed, total) => report(completed, `Resolving stop, target and hold rules · ${completed.toLocaleString()} / ${total.toLocaleString()} signals`)))
+    const { trades, statistics } = simulation
     workspaceStore.setHistoricalTrades(trades, statistics)
     // A reviewer opening a completed simulation should land on the strongest resolved example,
     // not simply the first chronological trade.

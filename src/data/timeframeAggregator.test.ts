@@ -55,9 +55,9 @@ describe('deterministic timeframe aggregation', () => {
     expect(() => setTimeframe('2m')).toThrow(/Unsupported timeframe/)
   })
 
-  it('compares cached views without changing the active human timeframe', () => {
+  it('compares cached views without changing the active human timeframe', async () => {
     workspaceStore.selectDataset(dataset); setTimeframe('5m')
-    const comparison = compareTimeframes({ timeframes: ['1m', '5m'], conditions: [{ kind: 'sma', period: 2, comparator: 'above' }], forwardHorizons: [1] })
+    const comparison = await compareTimeframes({ timeframes: ['1m', '5m'], conditions: [{ kind: 'sma', period: 2, comparator: 'above' }], forwardHorizons: [1] })
     expect(comparison.comparisons.map((entry) => entry.timeframe)).toEqual(['1m', '5m'])
     expect(getWorkspaceState().activeTimeframe).toBe('5m')
   })
